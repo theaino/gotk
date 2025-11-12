@@ -36,14 +36,38 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	for expr, exprType := range exprTypes {
-		fmt.Printf("%v\n", expr)
-		if tuple, ok := exprType.(*types.Tuple); ok {
-			fmt.Printf("\t%v\n", slices.Collect(tuple.Variables()))
-		} else {
-			fmt.Printf("\t%v\n", exprType)
+	modifyAst(fset, f, slices.Collect(maps.Values(exprs)), exprTypes)
+}
+
+func modifyAst(_ *token.FileSet, f *ast.File, exprs []ast.Expr, exprTypes map[ast.Expr]types.Type) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		block, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
 		}
-	}
+		newStmts := make([]ast.Stmt, 0)
+		for _, stmt := range block.List {
+			ast.Inspect(stmt, func(n ast.Node) bool {
+				expr, ok := n.(ast.Expr)
+				if !ok {
+					return true
+				}
+				// Insert stmt before expr
+				if slices.Contains(exprs, expr) {
+					fmt.Printf("%#v, %v\n", expr, exprTypes[expr])
+				}
+				// Change expr
+				return true
+			})
+
+			checkStmt := &ast.IfStmt{Cond: &ast.BinaryExpr{X: &ast.Ident{Name: "error"}, Op: token.NEQ, Y: &ast.Ident{Name: "nil"}}, Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{}}}}
+			newStmts = append(newStmts, checkStmt)
+			// Insert stmt after expr (if err != nil ...)
+			newStmts = append(newStmts, stmt)
+		}
+		block.List = newStmts
+		return true
+	})
 }
 
 func getExprTypes(fset *token.FileSet, f *ast.File, exprs []ast.Expr, pkg string) (exprTypes map[ast.Expr]types.Type, err error) {
@@ -67,7 +91,6 @@ func getExprTypes(fset *token.FileSet, f *ast.File, exprs []ast.Expr, pkg string
 	for _, expr := range exprs {
 		exprTypes[expr] = info.TypeOf(expr)
 	}
-	fmt.Printf("%#v\n", info.Types)
 	return
 }
 
