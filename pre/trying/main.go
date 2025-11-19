@@ -5,10 +5,12 @@ import (
 	"go/ast"
 	"go/importer"
 	"go/parser"
+	"go/printer"
 	"go/scanner"
 	"go/token"
 	"go/types"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 
@@ -37,6 +39,12 @@ func main() {
 		panic(err)
 	}
 	modifyAst(fset, f, slices.Collect(maps.Values(exprs)), exprTypes)
+
+	fset = token.NewFileSet()
+	err = printer.Fprint(os.Stdout, fset, f)
+	if err != nil {
+		fmt.Print(err)
+	}
 }
 
 func modifyAst(_ *token.FileSet, f *ast.File, exprs []ast.Expr, exprTypes map[ast.Expr]types.Type) {
@@ -60,10 +68,10 @@ func modifyAst(_ *token.FileSet, f *ast.File, exprs []ast.Expr, exprTypes map[as
 				return true
 			})
 
-			checkStmt := &ast.IfStmt{Cond: &ast.BinaryExpr{X: &ast.Ident{Name: "error"}, Op: token.NEQ, Y: &ast.Ident{Name: "nil"}}, Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{}}}}
-			newStmts = append(newStmts, checkStmt)
+			//checkStmt := &ast.IfStmt{Cond: &ast.BinaryExpr{X: &ast.Ident{Name: "error"}, Op: token.NEQ, Y: &ast.Ident{Name: "nil"}}, Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{}}}}
+			//newStmts = append(newStmts, checkStmt)
 			// Insert stmt after expr (if err != nil ...)
-			newStmts = append(newStmts, stmt)
+			//newStmts = append(newStmts, stmt)
 		}
 		block.List = newStmts
 		return true
