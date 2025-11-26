@@ -47,37 +47,61 @@ func main() {
 	}
 }
 
+// Insert an error checking structure at each expr
 func modifyAst(_ *token.FileSet, f *ast.File, exprs []ast.Expr, exprTypes map[ast.Expr]types.Type) {
-	ast.Inspect(f, func(n ast.Node) bool {
-		block, ok := n.(*ast.BlockStmt)
-		if !ok {
-			return true
-		}
+	blocks := deepestBlocksWithExprs(f, exprs)
+	for expr, block := range blocks {
 		newStmts := make([]ast.Stmt, 0)
 		for _, stmt := range block.List {
+			newStmts = append(newStmts, stmt)
 			ast.Inspect(stmt, func(n ast.Node) bool {
-				expr, ok := n.(ast.Expr)
+				if n != expr {
+					return true
+				}
+				ifStmt := &ast.IfStmt{
+					Cond: &ast.BinaryExpr{X: &ast.BasicLit{Value: "err"}, Op: token.NEQ, Y: &ast.BasicLit{Value: "nil"}},
+					Body: &ast.BlockStmt{
+						List: []ast.Stmt{
+							&ast.ReturnStmt{},
+						},
+					},
+				}
+				newStmts = append(newStmts, ifStmt)
+				return true
+			})
+		}
+		block.List = newStmts
+	}
+}
+
+// BFS to find the deepest BlockStmt which includes a specific Expr
+func deepestBlocksWithExprs(n ast.Node, exprs []ast.Expr) (blocks map[ast.Expr]*ast.BlockStmt) {
+	blocks = make(map[ast.Expr]*ast.BlockStmt)
+	nodeQueue := []ast.Node{n}
+	for len(nodeQueue) > 0 {
+		node := nodeQueue[0]
+		nodeQueue = nodeQueue[1:]
+		block, ok := node.(*ast.BlockStmt)
+		if ok {
+			ast.Inspect(block, func(n ast.Node) bool {
+				nodeExpr, ok := n.(ast.Expr)
 				if !ok {
 					return true
 				}
-				// Insert stmt before expr
-				if slices.Contains(exprs, expr) {
-					fmt.Printf("%#v, %v\n", expr, exprTypes[expr])
+				for _, expr := range exprs {
+					if nodeExpr == expr {
+						blocks[expr] = block
+					}
 				}
-				// Change expr
 				return true
 			})
-
-			//checkStmt := &ast.IfStmt{Cond: &ast.BinaryExpr{X: &ast.Ident{Name: "error"}, Op: token.NEQ, Y: &ast.Ident{Name: "nil"}}, Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{}}}}
-			//newStmts = append(newStmts, checkStmt)
-			// Insert stmt after expr (if err != nil ...)
-			//newStmts = append(newStmts, stmt)
 		}
-		block.List = newStmts
-		return true
-	})
+		nodeQueue = append(nodeQueue, slices.Collect(ast.Preorder(node))[1:]...)
+	}
+	return
 }
 
+// Get the types for each expr
 func getExprTypes(fset *token.FileSet, f *ast.File, exprs []ast.Expr, pkg string) (exprTypes map[ast.Expr]types.Type, err error) {
 	info := &types.Info{
     Types: make(map[ast.Expr]types.TypeAndValue),
@@ -102,6 +126,7 @@ func getExprTypes(fset *token.FileSet, f *ast.File, exprs []ast.Expr, pkg string
 	return
 }
 
+// Find each Expr which is is directly before a position
 func findWrappedExprs(f *ast.File, positions []int) (exprs map[int]ast.Expr, err error) {
 	exprs = make(map[int]ast.Expr)
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -129,12 +154,15 @@ func findWrappedExprs(f *ast.File, positions []int) (exprs map[int]ast.Expr, err
 	return
 }
 
+// Parse a golang source
 func parseSource(source string) (*token.FileSet, *ast.File, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "", source, parser.AllErrors)
 	return fset, f, err
 }
 
+// Replace a position array in the source with space characters
+// This makes the resulting source be parsable
 func replacePositionsWithSpaces(source string, positions []int) string {
 	var builder strings.Builder
 	var lastIdx int
@@ -149,6 +177,8 @@ func replacePositionsWithSpaces(source string, positions []int) string {
 	return builder.String()
 }
 
+// Get the '?' chars in the source
+// Using the parsing errors which are at an '?' char
 func getTryingCharPositions(source string) (positions []int) {
 	positions = make([]int, 0)
 	fset := token.NewFileSet()
