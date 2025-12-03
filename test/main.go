@@ -7,25 +7,14 @@ import (
 )
 
 func main() {
-	run()
+	err := run()
+	panic(err)
 }
 
 func run() (err error) {
-	fmt.Print(foo(1)? )
-	fmt.Print(foo(0)? )
+	fmt.Println(foo(3)?)
 
-	//===
-
-	fmt.Print(func()string{
-		r1, r2 := foo(1)
-		err = r2
-		return r1
-	})
-	if err != nil {
-		return
-	}
-
-	return nil
+	return
 }
 
 func foo(n int) (string, error) {

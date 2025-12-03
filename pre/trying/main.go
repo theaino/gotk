@@ -9,75 +9,166 @@ import (
 	"go/scanner"
 	"go/token"
 	"go/types"
-	"maps"
 	"os"
 	"slices"
 	"strings"
 
 	"github.com/theaino/gotk/lib"
+	"golang.org/x/tools/go/ast/astutil"
 )
 
+type trying struct {
+	source string
+	fset *token.FileSet
+	file *ast.File
+	info *types.Info
+	tryingPositions []int
+	tryingExprs []ast.Expr
+	tryingBlocks []*ast.BlockStmt
+	finishedExprs map[ast.Expr]bool
+}
 
 func main() {
 	args, err := lib.GetArgs()
 	if err != nil {
 		panic(err)
 	}
-	
-	positions := getTryingCharPositions(args.Source)
-	source := replacePositionsWithSpaces(args.Source, positions)
-	fset, f, err := parseSource(source)
-	if err != nil {
-		panic(err)
-	}
-	exprs, err := findWrappedExprs(f, positions)
-	if err != nil {
-		panic(err)
-	}
-	exprTypes, err := getExprTypes(fset, f, slices.Collect(maps.Values(exprs)), args.Root)
-	if err != nil {
-		panic(err)
-	}
-	modifyAst(fset, f, slices.Collect(maps.Values(exprs)), exprTypes)
 
-	fset = token.NewFileSet()
-	err = printer.Fprint(os.Stdout, fset, f)
+	t := trying{
+		source: args.Source,
+		finishedExprs: make(map[ast.Expr]bool),
+	}
+	
+	t.getCharPositions()
+	t.replacePositions()
+	err = t.parseSource()
+	if err != nil {
+		panic(err)
+	}
+	err = t.findWrappedExprs()
+	if err != nil {
+		panic(err)
+	}
+	err = t.loadTypes(args.Root)
+	if err != nil {
+		panic(err)
+	}
+	t.findSurroundingBlocks()
+	t.modifyAst()
+
+	err = printer.Fprint(os.Stdout, t.fset, t.file)
 	if err != nil {
 		fmt.Print(err)
 	}
 }
 
 // Insert an error checking structure at each expr
-func modifyAst(_ *token.FileSet, f *ast.File, exprs []ast.Expr, exprTypes map[ast.Expr]types.Type) {
-	blocks := deepestBlocksWithExprs(f, exprs)
-	for expr, block := range blocks {
-		newStmts := make([]ast.Stmt, 0)
+func (t *trying) modifyAst() {
+	for _, block := range t.tryingBlocks {
+		newStmts := make([]ast.Stmt, 0, len(block.List))
 		for _, stmt := range block.List {
-			newStmts = append(newStmts, stmt)
-			ast.Inspect(stmt, func(n ast.Node) bool {
-				if n != expr {
+			hasTryingExpr := false
+			stmt := astutil.Apply(stmt, nil, func(c *astutil.Cursor) bool {
+				expr, ok := c.Node().(ast.Expr)
+				if !ok {
 					return true
 				}
-				ifStmt := &ast.IfStmt{
-					Cond: &ast.BinaryExpr{X: &ast.BasicLit{Value: "err"}, Op: token.NEQ, Y: &ast.BasicLit{Value: "nil"}},
+				if finished, _ := t.finishedExprs[expr]; finished {
+					return true
+				}
+				idx := slices.Index(t.tryingExprs, expr)
+				if idx == -1 {
+					return true
+				}
+				resultTypes := make([]string, 0)
+				switch exprType := t.info.TypeOf(expr).(type) {
+				case *types.Tuple:
+					for typeVar := range exprType.Variables() {
+						resultTypes = append(resultTypes, typeVar.Type().String())
+					}
+				default:
+					resultTypes = append(resultTypes, exprType.String())
+				}
+				resultFields := make([]*ast.Field, 0, len(resultTypes) - 1)
+				for _, resultType := range resultTypes {
+					if resultType == "error" {
+						continue
+					}
+					resultFields = append(resultFields, &ast.Field{
+						Type: &ast.Ident{Name: resultType},
+					})
+				}
+				varExprs := make([]ast.Expr, len(resultTypes))
+				varExprsWithoutErr := make([]ast.Expr, 0, len(resultFields))
+				for idx, resultType := range resultTypes {
+					name := "err"
+					if resultType != "error" {
+						name = fmt.Sprintf("tryingR%d", idx)
+						varExprsWithoutErr = append(varExprsWithoutErr, &ast.Ident{Name: name})
+					}
+					varExprs[idx] = &ast.Ident{Name: name}
+				}
+				varDecls := make([]ast.Stmt, 0, len(resultFields))
+				for idx, varExpr := range varExprs {
+					if varExpr.(*ast.Ident).Name == "err" {
+						continue
+					}
+					varDecls = append(varDecls, &ast.DeclStmt{
+						Decl: &ast.GenDecl{
+							Tok: token.VAR,
+							Specs: []ast.Spec{
+								&ast.ValueSpec{
+									Names: []*ast.Ident{varExpr.(*ast.Ident)},
+									Type: &ast.Ident{Name: resultTypes[idx]},
+								},
+							},
+						},
+					})
+				}
+				hasTryingExpr = true
+				c.Replace(&ast.CallExpr{
+					Fun: &ast.FuncLit{
+						Type: &ast.FuncType{
+							Results: &ast.FieldList{List: resultFields},
+						},
+						Body: &ast.BlockStmt{
+							List: append(
+								varDecls,
+								&ast.AssignStmt{
+									Tok: token.ASSIGN,
+									Lhs: varExprs,
+									Rhs: []ast.Expr{expr},
+								},
+								&ast.ReturnStmt{Results: varExprsWithoutErr},
+							),
+						},
+					},
+					Args: []ast.Expr{},
+				})
+				t.finishedExprs[expr] = true
+				return true
+			}).(ast.Stmt)
+			newStmts = append(newStmts, stmt)
+			if hasTryingExpr {
+				newStmts = append(newStmts, &ast.IfStmt{
+					Cond: &ast.BinaryExpr{X: &ast.Ident{Name: "err"}, Op: token.NEQ, Y: &ast.Ident{Name: "nil"}},
 					Body: &ast.BlockStmt{
 						List: []ast.Stmt{
 							&ast.ReturnStmt{},
 						},
 					},
-				}
-				newStmts = append(newStmts, ifStmt)
-				return true
-			})
+				})
+			}
 		}
 		block.List = newStmts
 	}
 }
 
+
 // BFS to find the deepest BlockStmt which includes a specific Expr
-func deepestBlocksWithExprs(n ast.Node, exprs []ast.Expr) (blocks map[ast.Expr]*ast.BlockStmt) {
-	blocks = make(map[ast.Expr]*ast.BlockStmt)
-	nodeQueue := []ast.Node{n}
+func (t *trying) findSurroundingBlocks() {
+	t.tryingBlocks = make([]*ast.BlockStmt, len(t.tryingExprs))
+	nodeQueue := []ast.Node{t.file}
 	for len(nodeQueue) > 0 {
 		node := nodeQueue[0]
 		nodeQueue = nodeQueue[1:]
@@ -88,9 +179,9 @@ func deepestBlocksWithExprs(n ast.Node, exprs []ast.Expr) (blocks map[ast.Expr]*
 				if !ok {
 					return true
 				}
-				for _, expr := range exprs {
+				for idx, expr := range t.tryingExprs {
 					if nodeExpr == expr {
-						blocks[expr] = block
+						t.tryingBlocks[idx] = block
 					}
 				}
 				return true
@@ -98,55 +189,47 @@ func deepestBlocksWithExprs(n ast.Node, exprs []ast.Expr) (blocks map[ast.Expr]*
 		}
 		nodeQueue = append(nodeQueue, slices.Collect(ast.Preorder(node))[1:]...)
 	}
-	return
 }
 
-// Get the types for each expr
-func getExprTypes(fset *token.FileSet, f *ast.File, exprs []ast.Expr, pkg string) (exprTypes map[ast.Expr]types.Type, err error) {
-	info := &types.Info{
+// Load the ast types
+func (t *trying) loadTypes(pkg string) (err error) {
+	t.info = &types.Info{
     Types: make(map[ast.Expr]types.TypeAndValue),
     Defs:  make(map[*ast.Ident]types.Object),
     Uses:  make(map[*ast.Ident]types.Object),
 	}
 	conf := types.Config{
 		FakeImportC: true,
-		Importer: importer.ForCompiler(fset, "source", nil),
+		Importer: importer.ForCompiler(t.fset, "source", nil),
 		Error: func(err error) {
 			fmt.Printf("%v\n", err)
 		},
 	}
-	_, err = conf.Check(pkg, fset, []*ast.File{f}, info)
-	if err != nil {
-		return
-	}
-	exprTypes = make(map[ast.Expr]types.Type)
-	for _, expr := range exprs {
-		exprTypes[expr] = info.TypeOf(expr)
-	}
+	_, err = conf.Check(pkg, t.fset, []*ast.File{t.file}, t.info)
 	return
 }
 
 // Find each Expr which is is directly before a position
-func findWrappedExprs(f *ast.File, positions []int) (exprs map[int]ast.Expr, err error) {
-	exprs = make(map[int]ast.Expr)
-	ast.Inspect(f, func(n ast.Node) bool {
+func (t *trying) findWrappedExprs() (err error) {
+	t.tryingExprs = make([]ast.Expr, len(t.tryingPositions))
+	ast.Inspect(t.file, func(n ast.Node) bool {
 		expr, ok := n.(ast.Expr)
 		if !ok {
 			return true
 		}
-		for _, position := range positions {
+		for idx, position := range t.tryingPositions {
 			if int(expr.End()) > position + 1 {
 				continue
 			}
-			wrappedExpr, ok := exprs[position]
-			if !ok {
-				exprs[position] = expr
+			wrappedExpr := t.tryingExprs[idx]
+			if wrappedExpr == nil {
+				t.tryingExprs[idx] = expr
 				continue
 			}
 			if expr.End() > wrappedExpr.End() {
-				exprs[position] = expr
+				t.tryingExprs[idx] = expr
 			} else if expr.End() == wrappedExpr.End() && expr.Pos() < wrappedExpr.End() {
-				exprs[position] = expr
+				t.tryingExprs[idx] = expr
 			}
 		}
 		return true
@@ -155,48 +238,48 @@ func findWrappedExprs(f *ast.File, positions []int) (exprs map[int]ast.Expr, err
 }
 
 // Parse a golang source
-func parseSource(source string) (*token.FileSet, *ast.File, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "", source, parser.AllErrors)
-	return fset, f, err
+func (t *trying) parseSource() (err error) {
+	t.fset = token.NewFileSet()
+	t.file, err = parser.ParseFile(t.fset, "", t.source, parser.AllErrors)
+	return err
 }
 
 // Replace a position array in the source with space characters
 // This makes the resulting source be parsable
-func replacePositionsWithSpaces(source string, positions []int) string {
+func (t *trying) replacePositions() {
 	var builder strings.Builder
 	var lastIdx int
-	for _, pos := range positions {
-		builder.WriteString(source[lastIdx:pos])
+	for _, pos := range t.tryingPositions {
+		builder.WriteString(t.source[lastIdx:pos])
 		builder.WriteString(" ")
 		lastIdx = pos + 1
 	}
-	if lastIdx < len(source) {
-		builder.WriteString(source[lastIdx:])
+	if lastIdx < len(t.source) {
+		builder.WriteString(t.source[lastIdx:])
 	}
-	return builder.String()
+	t.source = builder.String()
 }
 
 // Get the '?' chars in the source
 // Using the parsing errors which are at an '?' char
-func getTryingCharPositions(source string) (positions []int) {
-	positions = make([]int, 0)
+func (t *trying) getCharPositions() {
+	t.tryingPositions = make([]int, 0)
 	fset := token.NewFileSet()
-	_, errs := parser.ParseFile(fset, "", source, parser.AllErrors)
+	_, errs := parser.ParseFile(fset, "", t.source, parser.AllErrors)
 	if errs == nil {
 		return
 	}
 	for _, err := range errs.(scanner.ErrorList) {
-		char := source[err.Pos.Offset]
+		char := t.source[err.Pos.Offset]
 		if char != '?' {
 			continue
 		}
-		if slices.Contains(positions, err.Pos.Offset) {
+		if slices.Contains(t.tryingPositions, err.Pos.Offset) {
 			continue
 		}
-		positions = append(positions, err.Pos.Offset)
+		t.tryingPositions = append(t.tryingPositions, err.Pos.Offset)
 	}
-	slices.Sort(positions)
+	slices.Sort(t.tryingPositions)
 	return
 }
 

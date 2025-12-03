@@ -10,6 +10,9 @@ import (
 
 
 func main() {
+	cwd, _ := os.Getwd()
+	root := flag.String("root", cwd, "Specify the project root dir")
+
 	flag.Parse()
 
 	path := flag.Arg(0)
@@ -19,12 +22,8 @@ func main() {
 		panic(err)
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
 	args := lib.TkArgs{
-		Root: cwd,
+		Root: *root,
 		Path: path,
 		Source: string(data),
 	}
