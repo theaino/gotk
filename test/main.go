@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {

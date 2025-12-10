@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 
 	"github.com/theaino/gotk/lib"
 )
@@ -11,22 +12,17 @@ import (
 
 func main() {
 	cwd, _ := os.Getwd()
-	root := flag.String("root", cwd, "Specify the project root dir")
 
 	flag.Parse()
 
-	path := flag.Arg(0)
+	modPath := flag.Arg(0)
 
-	data, err := os.ReadFile(path)
+	mod, err := lib.CloneModule(modPath, path.Join(cwd, ".tk"))
 	if err != nil {
 		panic(err)
 	}
 
-	args := lib.TkArgs{
-		Root: *root,
-		Path: path,
-		Source: string(data),
-	}
+	args := lib.TkArgs{Mod: mod}
 
 	// Temp. testing preprocessors
 	cmd, err := args.Call("go", "run", "./pre/trying")

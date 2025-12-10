@@ -9,9 +9,7 @@ import (
 
 
 type TkArgs struct {
-	Root string
-	Path string
-	Source string
+	Mod GenMod
 }
 
 func GetArgs() (args TkArgs, err error) {
