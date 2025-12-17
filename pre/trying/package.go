@@ -22,7 +22,8 @@ func loadPackage(root string) (*tryingPackage, error) {
 		ParseFile: func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
 			return parseTryingFile(pkg, fset, filename, string(src))
 		},
-		Mode: packages.LoadSyntax,
+		Dir: root,
+		Mode: packages.LoadFiles | packages.LoadImports | packages.LoadTypes | packages.LoadSyntax,
 	}, root)
 	if err != nil {
 		return nil, err
@@ -31,10 +32,13 @@ func loadPackage(root string) (*tryingPackage, error) {
 	return pkg, nil
 }
 
-func processPackageFiles(pkg *packages.Package) (err error) {
-	for idx, file := range pkg.Syntax {
-		path := pkg.CompiledGoFiles[idx]
-		if err = processFile(file, path); err != nil {
+func (p *tryingPackage) process() (err error) {
+	for idx, file := range p.Package.Syntax {
+		path := p.Package.CompiledGoFiles[idx]
+		if err = p.processFile(file, path); err != nil {
+			return
+		}
+		if err = p.writeFile(file, path); err != nil {
 			return
 		}
 	}

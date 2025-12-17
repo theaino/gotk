@@ -13,7 +13,7 @@ func (p *tryingPackage) findSurroundingBlocks(path string, file *ast.File) (bloc
 		node := nodeQueue[0]
 		nodeQueue = nodeQueue[1:]
 		block, ok := node.(*ast.BlockStmt)
-		if ok {
+		if ok { 
 			ast.Inspect(block, func(n ast.Node) bool {
 				nodeExpr, ok := n.(ast.Expr)
 				if !ok {
@@ -41,7 +41,7 @@ func (p *tryingPackage) findWrappedExprs(path string, file *ast.File) (err error
 			return true
 		}
 		for idx, position := range p.Positions[path] {
-			if int(expr.End()) > position + 1 {
+			if int(expr.End() - file.Pos()) > position + 1 {
 				continue
 			}
 			wrappedExpr := p.Exprs[path][idx]

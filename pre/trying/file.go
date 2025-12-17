@@ -3,8 +3,10 @@ package main
 import (
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/scanner"
 	"go/token"
+	"os"
 	"slices"
 	"strings"
 )
@@ -71,3 +73,10 @@ func (p *tryingPackage) processFile(file *ast.File, path string) error {
 	return nil
 }
 
+func (p *tryingPackage) writeFile(file *ast.File, path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	return printer.Fprint(f, p.Package.Fset, file)
+}

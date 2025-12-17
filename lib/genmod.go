@@ -9,6 +9,7 @@ type GenMod struct {
 }
 
 func CloneModule(sourcePath, destPath string) (GenMod, error) {
+	os.RemoveAll(destPath)
 	err := os.CopyFS(destPath, os.DirFS(sourcePath))
 	return GenMod{Root: destPath}, err
 }

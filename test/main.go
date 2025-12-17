@@ -12,15 +12,20 @@ func main() {
 	panic(err)
 }
 
+var testData = `
+a: foo
+b:
+	c: bar
+`
+
 func run() (err error) {
-	fmt.Println(foo(3)?)
+	var res any
+	yaml.Unmarshal([]byte(testData), &res)?
+	fmt.Println(foo(res)?)
 
 	return
 }
 
-func foo(n int) (string, error) {
-	if n == 0 {
-		return "", errors.New("division by (?) zero")
-	}
+func foo(n any) (string, error) {
 	return strconv.Itoa(1337 / n), nil
 }
